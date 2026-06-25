@@ -1,0 +1,6 @@
+{
+  "api_key": "zt_your_api_key_here",
+  "device_id": "AA:BB:CC:DD:EE:FF",
+  "page_id": 3,
+  "interval_seconds": 60
+}
