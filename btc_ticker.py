@@ -48,15 +48,22 @@ def get_btc_price() -> dict:
 
 
 def load_font(size: int) -> ImageFont.FreeTypeFont:
-    """尝试加载系统字体，兜底用默认字体。"""
+    """加载支持中文的系统字体。"""
     candidates = [
-        "/System/Library/Fonts/Helvetica.ttc",          # macOS
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",  # Linux
-        "/System/Library/Fonts/Arial.ttf",
+        # macOS 简体中文字体
+        ("/System/Library/Fonts/STHeiti Medium.ttc", 0),
+        ("/System/Library/Fonts/Hiragino Sans GB.ttc", 0),
+        ("/System/Library/Fonts/STHeiti Light.ttc", 0),
+        # Linux 中文字体
+        ("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc", 0),
+        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 0),
+        # 兜底（不含中文，但不崩溃）
+        ("/System/Library/Fonts/Helvetica.ttc", 0),
+        ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 0),
     ]
-    for path in candidates:
+    for path, index in candidates:
         try:
-            return ImageFont.truetype(path, size)
+            return ImageFont.truetype(path, size, index=index)
         except Exception:
             pass
     return ImageFont.load_default()
