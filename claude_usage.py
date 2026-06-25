@@ -323,10 +323,12 @@ def generate_image(session: dict, today: dict, weekly: list[dict],
     f_sm    = load_font(12)
     f_xs    = load_cn_font(11)
 
-    now_str = datetime.datetime.now().strftime("%m-%d %H:%M")
-    status  = session["status"].upper()
-    proj    = session["cwd"] or "—"
-    dur_str = f"{session['duration_min']}min" if session["duration_min"] else "—"
+    now      = datetime.datetime.now()
+    time_str = now.strftime("%H:%M")
+    date_str = now.strftime("%m-%d")
+    status   = session["status"].upper()
+    proj     = session["cwd"] or "—"
+    dur_str  = f"{session['duration_min']}min" if session["duration_min"] else "—"
 
     # ── TOP BAR (y=0-35) ─────────────────────────────
     draw.rectangle([0, 0, W, 36], fill="black")
@@ -334,10 +336,11 @@ def generate_image(session: dict, today: dict, weekly: list[dict],
     pill_x = W - 112
     draw.rectangle([pill_x, 8, pill_x + 48, 27], fill="white")
     draw.text((pill_x + 5, 9), status, font=f_sm, fill="black")
-    draw.text((W - 58, 10), now_str, font=f_sm, fill="white")
+    draw.text((W - 46, 10), time_str, font=f_sm, fill="white")
 
     # ── PROJECT LINE (y=36-57) ───────────────────────
     draw.text((12, 41), f"/{proj}", font=load_cn_font(13), fill="black")
+    draw.text((W - 100, 42), date_str, font=f_sm, fill="black")
     draw.text((W - 52, 42), dur_str, font=f_sm, fill="black")
     draw.line([0, 58, W, 58], fill="black", width=1)
 
@@ -345,8 +348,9 @@ def generate_image(session: dict, today: dict, weekly: list[dict],
     cmd_str = str(today["commands"])
     bbox    = draw.textbbox((0, 0), cmd_str, font=f_big)
     cw      = bbox[2] - bbox[0]
-    draw.text(((188 - cw) // 2, 63), cmd_str, font=f_big, fill="black")
-    draw.text((10, 110), f"R {today['reads']}  E {today['edits']}  W {today['writes']}",
+    draw.text(((188 - cw) // 2, 62), cmd_str, font=f_big, fill="black")
+    draw.text((10, 107), "CMDS TODAY", font=load_font(10), fill="black")
+    draw.text((10, 113), f"R {today['reads']}  E {today['edits']}  W {today['writes']}",
               font=f_sm, fill="black")
     draw.line([192, 60, 192, 126], fill="black", width=1)
     draw.text((200, 61), "7天活跃", font=f_xs, fill="black")
@@ -396,7 +400,7 @@ def generate_image(session: dict, today: dict, weekly: list[dict],
     ver = session.get("version", "")
     ver_str = f"v{ver}" if ver else "Claude Code"
     draw.text((12, H - 21), ver_str, font=f_xs, fill="white")
-    draw.text((W - 155, H - 21), "claude.ai/code  极趣云平台看板", font=f_xs, fill="white")
+    draw.text((W - 88, H - 21), "极趣云平台看板", font=f_xs, fill="white")
 
     return img
 
