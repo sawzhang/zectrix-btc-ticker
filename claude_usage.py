@@ -153,6 +153,65 @@ def get_alltime_stats() -> dict:
                 "total_sessions": 0, "active_days": 0}
 
 
+def get_plan_limits() -> dict:
+    """用 Claude Code OAuth token 调 Anthropic API，从响应头读取用量限制。"""
+    result = {
+        "session_pct": 0.0, "session_reset_ts": 0,
+        "weekly_pct":  0.0, "weekly_reset_ts":  0,
+        "plan": "", "status": "unknown",
+    }
+    try:
+        import subprocess
+        raw = subprocess.check_output(
+            ["security", "find-generic-password",
+             "-s", "Claude Code-credentials", "-a", "alexzhang", "-w"],
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+        token = json.loads(raw)["claudeAiOauth"]["accessToken"]
+
+        r = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "anthropic-version": "2023-06-01",
+                "anthropic-client-platform": "claude_code",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "."}],
+            },
+            timeout=12,
+        )
+        h = r.headers
+        result["session_pct"]      = float(h.get("anthropic-ratelimit-unified-5h-utilization", 0))
+        result["session_reset_ts"] = int(h.get("anthropic-ratelimit-unified-5h-reset", 0))
+        result["weekly_pct"]       = float(h.get("anthropic-ratelimit-unified-7d-utilization", 0))
+        result["weekly_reset_ts"]  = int(h.get("anthropic-ratelimit-unified-7d-reset", 0))
+        result["status"]           = h.get("anthropic-ratelimit-unified-status", "")
+    except Exception:
+        pass
+    return result
+
+
+def fmt_reset(ts: int) -> str:
+    """将 Unix 时间戳格式化为「X h Y m」或「周X HH:MM」。"""
+    if not ts:
+        return "—"
+    now  = time.time()
+    diff = ts - now
+    if diff <= 0:
+        return "即将重置"
+    if diff < 3600 * 24:
+        h = int(diff // 3600)
+        m = int((diff % 3600) // 60)
+        return f"{h}h {m:02d}m"
+    dt = datetime.datetime.fromtimestamp(ts)
+    weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+    return f"{weekdays[dt.weekday()]} {dt.strftime('%H:%M')}"
+
+
 # ── 字体 ─────────────────────────────────────────────
 
 def load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
@@ -242,97 +301,102 @@ def draw_bar_chart(draw: ImageDraw.ImageDraw, weekly: list[dict],
     draw.text((label_x, y + chart_h + 4), date_short, font=font_xs, fill="black")
 
 
+def _draw_progress_bar(draw: ImageDraw.ImageDraw, x: int, y: int,
+                        w: int, h: int, pct: float) -> None:
+    """进度条：填充实心黑，剩余区域竖线纹理。"""
+    draw.rectangle([x, y, x + w, y + h], outline="black", fill="white")
+    fill_w = max(0, min(int(w * pct), w))
+    if fill_w > 0:
+        draw.rectangle([x, y, x + fill_w, y + h], fill="black")
+    for sx in range(x + fill_w + 2, x + w - 1, 3):
+        draw.line([sx, y + 1, sx, y + h - 1], fill="black")
+
+
 def generate_image(session: dict, today: dict, weekly: list[dict],
-                   alltime: dict) -> Image.Image:
+                   alltime: dict, limits: dict) -> Image.Image:
     img  = Image.new("RGB", (W, H), "white")
     draw = ImageDraw.Draw(img)
 
-    # ── fonts ──
-    f_title  = load_cn_font(17)
-    f_status = load_font(12)
-    f_big    = load_font(46)
-    f_mid    = load_font(20)
-    f_label  = load_cn_font(13)
-    f_sm     = load_font(13)
-    f_xs     = load_cn_font(11)
+    f_title = load_cn_font(17)
+    f_big   = load_font(44)
+    f_mid   = load_font(18)
+    f_sm    = load_font(12)
+    f_xs    = load_cn_font(11)
 
-    now_str   = datetime.datetime.now().strftime("%m-%d %H:%M")
-    status    = session["status"].upper()         # BUSY / IDLE
-    proj      = session["cwd"] or "—"
-    dur_str   = f"{session['duration_min']}min" if session["duration_min"] else "—"
+    now_str = datetime.datetime.now().strftime("%m-%d %H:%M")
+    status  = session["status"].upper()
+    proj    = session["cwd"] or "—"
+    dur_str = f"{session['duration_min']}min" if session["duration_min"] else "—"
 
-    # ── TOP BAR ──────────────────────────────────────
+    # ── TOP BAR (y=0-35) ─────────────────────────────
     draw.rectangle([0, 0, W, 36], fill="black")
     draw.text((12, 9), "◆ CLAUDE CODE", font=f_title, fill="white")
+    pill_x = W - 112
+    draw.rectangle([pill_x, 8, pill_x + 48, 27], fill="white")
+    draw.text((pill_x + 5, 9), status, font=f_sm, fill="black")
+    draw.text((W - 58, 10), now_str, font=f_sm, fill="white")
 
-    # 状态 pill
-    status_color = "white" if status == "BUSY" else "#888888"
-    pill_x = W - 110
-    draw.rectangle([pill_x, 8, pill_x + 50, 28], fill="white")
-    draw.text((pill_x + 5, 10), status, font=f_status, fill="black")
-    draw.text((W - 54, 11), now_str, font=f_sm, fill="white")
+    # ── PROJECT LINE (y=36-57) ───────────────────────
+    draw.text((12, 41), f"/{proj}", font=load_cn_font(13), fill="black")
+    draw.text((W - 52, 42), dur_str, font=f_sm, fill="black")
+    draw.line([0, 58, W, 58], fill="black", width=1)
 
-    # ── PROJECT LINE ─────────────────────────────────
-    draw.text((12, 42), f"/{proj}", font=load_cn_font(14), fill="black")
-    draw.text((W - 60, 43), dur_str, font=f_sm, fill="black")
-    draw.line([0, 60, W, 60], fill="black", width=1)
-
-    # ── MAIN AREA ────────────────────────────────────
-    # 左侧：今日 commands 大数字
+    # ── MAIN AREA (y=59-125) ─────────────────────────
     cmd_str = str(today["commands"])
     bbox    = draw.textbbox((0, 0), cmd_str, font=f_big)
     cw      = bbox[2] - bbox[0]
-    draw.text(((190 - cw) // 2, 68), cmd_str, font=f_big, fill="black")
-    draw.text((12, 118), "今日指令数", font=f_label, fill="black")
-
-    # 左侧次要数据
-    draw.text((12, 136), f"R {today['reads']}  E {today['edits']}  W {today['writes']}",
+    draw.text(((188 - cw) // 2, 63), cmd_str, font=f_big, fill="black")
+    draw.text((10, 110), f"R {today['reads']}  E {today['edits']}  W {today['writes']}",
               font=f_sm, fill="black")
+    draw.line([192, 60, 192, 126], fill="black", width=1)
+    draw.text((200, 61), "7天活跃", font=f_xs, fill="black")
+    draw_bar_chart(draw, weekly, x=200, y=74, w=192, h=52)
+    draw.line([0, 126, W, 126], fill="black", width=1)
 
-    grade_text = GRADE_LABEL.get(today["grade"], "—")
-    draw.text((12, 155), f"Grade: {grade_text}", font=f_xs, fill="black")
+    # ── PLAN LIMITS (y=127-215) ──────────────────────
+    draw.text((12, 130), "PLAN LIMITS", font=load_font(11), fill="black")
 
-    # 中间分割线
-    draw.line([195, 62, 195, 178], fill="black", width=1)
+    BAR_X = 56
+    BAR_W = 220
+    BAR_H = 13
 
-    # 右侧：7 天趋势图
-    draw.text((205, 64), "7天活跃度", font=f_xs, fill="black")
-    draw_bar_chart(draw, weekly, x=203, y=80, w=188, h=88)
+    for i, (label, pct, reset_ts) in enumerate([
+        ("5H", limits["session_pct"], limits["session_reset_ts"]),
+        ("7D", limits["weekly_pct"],  limits["weekly_reset_ts"]),
+    ]):
+        y0 = 147 + i * 34
+        draw.text((12, y0), label, font=f_sm, fill="black")
+        _draw_progress_bar(draw, BAR_X, y0, BAR_W, BAR_H, pct)
+        pct_str = f"{pct * 100:.0f}%"
+        draw.text((BAR_X + BAR_W + 6, y0), pct_str, font=f_sm, fill="black")
+        draw.text((BAR_X, y0 + BAR_H + 3), f"reset {fmt_reset(reset_ts)}", font=f_xs, fill="black")
 
-    # ── DIVIDER ──────────────────────────────────────
-    draw.line([0, 178, W, 178], fill="black", width=1)
+    draw.line([0, 216, W, 216], fill="black", width=1)
 
-    # ── ALL-TIME STATS ───────────────────────────────
-    msgs_k   = f"{alltime['total_msgs'] / 1000:.1f}K"
-    tools_k  = f"{alltime['total_tools'] / 1000:.1f}K"
-    days_n   = str(alltime["active_days"])
-    sess_n   = str(alltime["total_sessions"])
-
-    # 四格布局
+    # ── ALL-TIME STATS (y=217-255) ───────────────────
+    msgs_k  = f"{alltime['total_msgs'] / 1000:.1f}K"
+    tools_k = f"{alltime['total_tools'] / 1000:.1f}K"
     col = W // 4
     for i, (val, lbl) in enumerate([
-        (msgs_k,  "总消息"),
-        (tools_k, "工具调用"),
-        (sess_n,  "总会话"),
-        (days_n,  "活跃天"),
+        (msgs_k,                        "总消息"),
+        (tools_k,                       "工具"),
+        (str(alltime["total_sessions"]), "会话"),
+        (str(alltime["active_days"]),    "活跃天"),
     ]):
         cx = i * col + col // 2
         vbbox = draw.textbbox((0, 0), val, font=f_mid)
-        vw = vbbox[2] - vbbox[0]
-        draw.text((cx - vw // 2, 185), val, font=f_mid, fill="black")
+        draw.text((cx - (vbbox[2] - vbbox[0]) // 2, 221), val, font=f_mid, fill="black")
         lbbox = draw.textbbox((0, 0), lbl, font=f_xs)
-        lw = lbbox[2] - lbbox[0]
-        draw.text((cx - lw // 2, 210), lbl, font=f_xs, fill="black")
+        draw.text((cx - (lbbox[2] - lbbox[0]) // 2, 242), lbl, font=f_xs, fill="black")
         if i < 3:
-            draw.line([col * (i + 1), 182, col * (i + 1), 225], fill="black", width=1)
+            draw.line([col * (i + 1), 219, col * (i + 1), 255], fill="black", width=1)
 
-    # ── BOTTOM BAR ───────────────────────────────────
+    # ── BOTTOM BAR (y=272-299) ───────────────────────
     draw.rectangle([0, H - 28, W, H], fill="black")
     ver = session.get("version", "")
     ver_str = f"v{ver}" if ver else "Claude Code"
     draw.text((12, H - 21), ver_str, font=f_xs, fill="white")
-    draw.text((W - 155, H - 21),
-              "claude.ai/code  极趣云平台看板", font=f_xs, fill="white")
+    draw.text((W - 155, H - 21), "claude.ai/code  极趣云平台看板", font=f_xs, fill="white")
 
     return img
 
@@ -363,12 +427,13 @@ def main():
     today   = get_today_stats()
     weekly  = get_weekly_activity()
     alltime = get_alltime_stats()
+    limits  = get_plan_limits()
 
     if preview:
         print(f"Session: {session}")
         print(f"Today: {today}")
-        print(f"Weekly: {weekly}")
-        img = generate_image(session, today, weekly, alltime)
+        print(f"Limits: {limits}")
+        img = generate_image(session, today, weekly, alltime, limits)
         img.save("claude_preview.png")
         print("预览图已保存：claude_preview.png")
         return
@@ -380,11 +445,12 @@ def main():
             today   = get_today_stats()
             weekly  = get_weekly_activity()
             alltime = get_alltime_stats()
-            img     = generate_image(session, today, weekly, alltime)
+            limits  = get_plan_limits()
+            img     = generate_image(session, today, weekly, alltime, limits)
             result  = push_to_device(img)
             ts      = datetime.datetime.now().strftime("%H:%M:%S")
-            print(f"[{ts}] cmds={today['commands']} R={today['reads']} "
-                  f"E={today['edits']} W={today['writes']} status={session['status']} → {result}")
+            print(f"[{ts}] cmds={today['commands']} 5h={limits['session_pct']:.0%} "
+                  f"7d={limits['weekly_pct']:.0%} status={session['status']} → {result}")
         except Exception as e:
             print(f"[错误] {e}")
         time.sleep(INTERVAL)
